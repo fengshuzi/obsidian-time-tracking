@@ -26,7 +26,7 @@
 
 3. **开始计时** - 再次按 `Cmd/Ctrl + Enter`
    ```markdown
-   - DOING 实现时间追踪功能 <!-- ts:2026-01-19T10:00:56 -->
+   - DOING <!-- ts:2026-01-19T10:00:56|source:todo --> 实现时间追踪功能
    ```
 
 4. **完成任务** - 再次按 `Cmd/Ctrl + Enter`

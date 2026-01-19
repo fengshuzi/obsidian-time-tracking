@@ -6,7 +6,7 @@ import type TimeTrackingPlugin from './main';
 // 支持的任务状态
 type TodoStatus = 'TODO' | 'DOING' | 'LATER' | 'NOW' | 'DONE' | 'CANCELED';
 
-const TODO_REGEX = /^(\s*(?:[-*+]|\d+\.)\s+)?(TODO|DOING|LATER|NOW|DONE|CANCELED)\s+(.+)$/;
+const TODO_REGEX = /^(\s*(?:[-*+]|\d+\.)\s+)?(TODO|DOING|LATER|NOW|DONE|CANCELED)(?:\s*<!--[^>]*-->)?\s*(.*)$/;
 
 /**
  * 复选框 Widget - 替换 TODO 关键词
@@ -121,11 +121,17 @@ function createDecorations(view: EditorView, plugin: TimeTrackingPlugin): Decora
           );
         }
 
-        // 隐藏 HTML 时间注释
-        const commentMatch = content.match(/<!--\s*ts:[^>]*?-->/);
-        if (commentMatch) {
-          const commentStart = statusEnd + 1 + content.indexOf(commentMatch[0]);
-          const commentEnd = commentStart + commentMatch[0].length;
+        // 隐藏 HTML 时间注释（支持状态后的注释）
+        // 首先检查状态后是否有注释
+        const statusEndInLine = listMarkerLen + status.length;
+        const afterStatusText = lineText.substring(statusEndInLine);
+        const statusCommentMatch = afterStatusText.match(/^\s*(<!--\s*ts:[^>]*?-->)/);
+        
+        if (statusCommentMatch) {
+          // 状态后的注释（新格式）
+          const commentStartInLine = statusEndInLine + afterStatusText.indexOf(statusCommentMatch[1]);
+          const commentStart = line.from + commentStartInLine;
+          const commentEnd = commentStart + statusCommentMatch[1].length;
           
           builder.add(
             commentStart,
@@ -135,6 +141,23 @@ function createDecorations(view: EditorView, plugin: TimeTrackingPlugin): Decora
               inclusive: false
             })
           );
+        } else {
+          // 兼容旧格式：内容中的注释
+          const contentCommentMatch = content.match(/<!--\s*ts:[^>]*?-->/);
+          if (contentCommentMatch) {
+            const commentStartInContent = content.indexOf(contentCommentMatch[0]);
+            const commentStart = statusEnd + 1 + commentStartInContent;
+            const commentEnd = commentStart + contentCommentMatch[0].length;
+            
+            builder.add(
+              commentStart,
+              commentEnd,
+              Decoration.mark({
+                class: 'time-tracking-comment-hidden',
+                inclusive: false
+              })
+            );
+          }
         }
 
         // 如果是完成状态且启用删除线，添加样式

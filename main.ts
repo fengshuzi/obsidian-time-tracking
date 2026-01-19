@@ -16,7 +16,7 @@ const DEFAULT_SETTINGS: TimeTrackingSettings = {
   durationPosition: 'end',
   registerHotkey: true,
   enableLivePreview: true,
-  enableReadingMode: true,
+  enableReadingMode: false,  // 默认关闭阅读模式渲染
   showStatusLabel: true,
   enableStrikethrough: false
 };
@@ -91,7 +91,8 @@ export default class TimeTrackingPlugin extends Plugin {
    */
   processListItem(li: HTMLElement): void {
     const text = li.textContent || '';
-    const match = text.match(/^(TODO|DOING|LATER|NOW|DONE|CANCELED)\s+(.+)$/);
+    // 支持新格式：状态后可能有注释
+    const match = text.match(/^(TODO|DOING|LATER|NOW|DONE|CANCELED)(?:\s*<!--[^>]*-->)?\s*(.*)$/);
 
     if (match) {
       const [, status, content] = match;
@@ -99,6 +100,8 @@ export default class TimeTrackingPlugin extends Plugin {
       li.innerHTML = '';
       li.appendChild(checkbox);
       li.classList.add('time-tracking-list-item');
+      // 确保显示列表符号
+      li.style.listStyleType = 'disc';
     }
   }
 
@@ -106,7 +109,7 @@ export default class TimeTrackingPlugin extends Plugin {
    * 创建复选框元素
    */
   createCheckbox(status: 'TODO' | 'DOING' | 'LATER' | 'NOW' | 'DONE' | 'CANCELED', content: string): HTMLElement {
-    const container = document.createElement('div');
+    const container = document.createElement('span');
     container.className = 'time-tracking-item';
     container.dataset.status = status;
 
@@ -152,23 +155,57 @@ export default class TimeTrackingPlugin extends Plugin {
   }
 
   /**
+   * 清理意外的时间注释污染
+   * @param editor 编辑器实例
+   */
+  cleanTimeComments(editor: Editor) {
+    const cursor = editor.getCursor();
+    const line = editor.getLine(cursor.line);
+    
+    // 检查是否有时间注释但不是 DOING 状态
+    const hasTimeComment = this.extractTrackingInfo(line) !== null;
+    const isDoingTask = line.match(/^(\s*)([-*+]|\d+\.)\s+(DOING)\s*(?:<!--[^>]*-->)?\s*(.*)$/);
+    
+    if (hasTimeComment && !isDoingTask) {
+      // 清理意外的时间注释
+      const cleanedLine = this.removeTimeComment(line);
+      console.log(`[TimeTracking] 清理时间注释污染: "${line}" → "${cleanedLine}"`);
+      editor.setLine(cursor.line, cleanedLine);
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
    * 从 HTML 注释中提取开始时间和来源格式
    * @param line 当前行文本
    * @returns {startTime: string, source: 'todo' | 'checkbox'} 或 null
    */
   extractTrackingInfo(line: string): { startTime: string; source: 'todo' | 'checkbox' } | null {
-    const match = line.match(/<!--\s*ts:([^|]+)\|source:(\w+)\s*-->/);
-    if (match) {
+    // 新格式：状态后的注释 - DOING <!-- ts:xxx|source:xxx --> content
+    const newMatch = line.match(/DOING\s*<!--\s*ts:([^|]+)\|source:(\w+)\s*-->/);
+    if (newMatch) {
       return {
-        startTime: match[1],
-        source: match[2] as 'todo' | 'checkbox'
+        startTime: newMatch[1],
+        source: newMatch[2] as 'todo' | 'checkbox'
       };
     }
-    // 兼容旧格式（没有 source）
-    const oldMatch = line.match(/<!--\s*ts:([^>]+?)\s*-->/);
+    
+    // 兼容旧格式：内容后的注释 - DOING content <!-- ts:xxx|source:xxx -->
+    const oldMatch = line.match(/<!--\s*ts:([^|]+)\|source:(\w+)\s*-->/);
     if (oldMatch) {
       return {
         startTime: oldMatch[1],
+        source: oldMatch[2] as 'todo' | 'checkbox'
+      };
+    }
+    
+    // 兼容更旧格式（没有 source）
+    const legacyMatch = line.match(/<!--\s*ts:([^>]+?)\s*-->/);
+    if (legacyMatch) {
+      return {
+        startTime: legacyMatch[1],
         source: 'todo' // 默认为 todo
       };
     }
@@ -191,7 +228,7 @@ export default class TimeTrackingPlugin extends Plugin {
    * @returns 清理后的文本
    */
   removeTimeComment(line: string): string {
-    // 移除新格式（带 source）和旧格式的注释
+    // 移除新格式（状态后的注释）和旧格式（内容后的注释）
     return line.replace(/\s*<!--\s*ts:[^>]*?-->\s*/g, '');
   }
 
@@ -214,8 +251,11 @@ export default class TimeTrackingPlugin extends Plugin {
     
     console.log(`[TimeTracking] 原始行: "${line}"`);
     
+    // 首先清理任何意外的时间注释（防止污染新任务）
+    const cleanedLine = this.removeTimeComment(line);
+    
     // 1. 优先检查是否是原生 markdown 复选框 (- [ ] 或 - [x])
-    const checkboxMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+\[([ xX])\]\s+(.*)$/);
+    const checkboxMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+\[([ xX])\]\s+(.*)$/);
     if (checkboxMatch) {
       const [, indent, marker, checkState, content] = checkboxMatch;
       console.log(`[TimeTracking] 复选框匹配 - state: "${checkState}", content: "${content}"`);
@@ -223,7 +263,7 @@ export default class TimeTrackingPlugin extends Plugin {
       if (checkState === ' ') {
         // [ ] → DOING: 直接开始计时，记录来源为 checkbox
         const startTime = new Date().toISOString();
-        const newLine = `${indent}${marker} DOING ${content} <!-- ts:${startTime}|source:checkbox -->`;
+        const newLine = `${indent}${marker} DOING <!-- ts:${startTime}|source:checkbox --> ${content}`;
         console.log(`[TimeTracking] [ ] → DOING: "${newLine}"`);
         editor.setLine(cursor.line, newLine);
       } else {
@@ -236,9 +276,10 @@ export default class TimeTrackingPlugin extends Plugin {
     }
     
     // 2. 检测任务状态（支持 Logseq 格式：已有 - 前缀）
-    const todoMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(TODO)\s+(.*)$/);
-    const doingMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(DOING)\s+(.*)$/);
-    const doneMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(DONE)\s+(.*)$/);
+    // 使用原始行来检测 DOING 状态（因为需要时间注释），其他状态使用清理后的行
+    const todoMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+(TODO)\s+(.*)$/);
+    const doingMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(DOING)\s*(?:<!--[^>]*-->)?\s*(.*)$/); // 支持状态后的注释
+    const doneMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+(DONE)\s+(.*)$/);
     
     console.log(`[TimeTracking] 匹配结果 - TODO: ${!!todoMatch}, DOING: ${!!doingMatch}, DONE: ${!!doneMatch}`);
     
@@ -250,7 +291,7 @@ export default class TimeTrackingPlugin extends Plugin {
       const startTime = new Date().toISOString();
       
       if (content.trim()) {
-        newLine = `${indent}${marker} DOING ${content} <!-- ts:${startTime}|source:todo -->`;
+        newLine = `${indent}${marker} DOING <!-- ts:${startTime}|source:todo --> ${content}`;
       } else {
         newLine = `${indent}${marker} DOING <!-- ts:${startTime}|source:todo -->`;
       }
@@ -270,7 +311,7 @@ export default class TimeTrackingPlugin extends Plugin {
         const durationSeconds = Math.floor((end.getTime() - start.getTime()) / 1000);
         const durationStr = this.formatDuration(durationSeconds);
         
-        // 移除 HTML 注释
+        // 获取纯净的任务内容（移除可能残留的注释）
         let taskText = this.removeTimeComment(content).trim();
         
         if (trackingInfo.source === 'checkbox') {
@@ -334,8 +375,8 @@ export default class TimeTrackingPlugin extends Plugin {
       console.log(`[TimeTracking] DONE → 普通列表: "${newLine}"`);
       
     } else {
-      // 3. 检查是否是普通列表项
-      const listMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+      // 3. 检查是否是普通列表项（使用清理后的行）
+      const listMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
       console.log(`[TimeTracking] 普通列表匹配: ${!!listMatch}`);
       
       if (listMatch) {
@@ -352,11 +393,11 @@ export default class TimeTrackingPlugin extends Plugin {
         }
         console.log(`[TimeTracking] 普通列表 → TODO: "${newLine}"`);
       } else {
-        // 4. 不是列表项
-        const indent = line.match(/^(\s*)/)?.[1] || '';
-        if (line.trim()) {
+        // 4. 不是列表项（使用清理后的行）
+        const indent = cleanedLine.match(/^(\s*)/)?.[1] || '';
+        if (cleanedLine.trim()) {
           // 有内容，转换为 TODO 列表
-          const content = line.trim();
+          const content = cleanedLine.trim();
           newLine = `${indent}- TODO ${content}`;
         } else {
           // 空行，创建新的 TODO 列表项

@@ -12,10 +12,9 @@
 
 /* 基础容器样式 */
 .time-tracking-item {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 0.5em;
-  padding: 0.2em 0;
 }
 
 /* 复选框样式 */
@@ -92,10 +91,11 @@
   opacity: 0.8;
 }
 
-/* 列表项样式 */
+/* 列表项样式 - 保持原生列表样式 */
 .time-tracking-list-item {
-  list-style: none;
-  margin-left: -1.5em;
+  /* 不移除 list-style，保持原生的 • 符号 */
+  /* list-style: none; */
+  /* margin-left: -1.5em; */
 }
 
 /* 标题中的 TODO */
