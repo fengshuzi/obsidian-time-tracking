@@ -1,0 +1,221 @@
+import { editorLivePreviewField } from 'obsidian';
+import { EditorView, Decoration, ViewPlugin, WidgetType, DecorationSet, ViewUpdate } from '@codemirror/view';
+import { RangeSetBuilder } from '@codemirror/state';
+import type TimeTrackingPlugin from './main';
+
+// 支持的任务状态
+type TodoStatus = 'TODO' | 'DOING' | 'LATER' | 'NOW' | 'DONE' | 'CANCELED';
+
+const TODO_REGEX = /^(\s*(?:[-*+]|\d+\.)\s+)?(TODO|DOING|LATER|NOW|DONE|CANCELED)\s+(.+)$/;
+
+/**
+ * 复选框 Widget - 替换 TODO 关键词
+ */
+class TodoCheckboxWidget extends WidgetType {
+  constructor(
+    private status: TodoStatus,
+    private plugin: TimeTrackingPlugin,
+    private from: number,
+    private to: number
+  ) {
+    super();
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'task-list-item-checkbox time-tracking-live-checkbox';
+    checkbox.checked = this.status === 'DONE' || this.status === 'CANCELED';
+    checkbox.dataset.status = this.status;
+
+    // 点击事件 - 切换 TODO/DONE
+    checkbox.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const newStatus = this.status === 'DONE' ? 'TODO' : 'DONE';
+      
+      view.dispatch({
+        changes: {
+          from: this.from,
+          to: this.to,
+          insert: newStatus
+        }
+      });
+    });
+
+    return checkbox;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+/**
+ * 状态标签 Widget
+ */
+class TodoStatusWidget extends WidgetType {
+  constructor(private status: TodoStatus) {
+    super();
+  }
+
+  toDOM(): HTMLElement {
+    const label = document.createElement('span');
+    label.className = `time-tracking-status-badge time-tracking-status-${this.status.toLowerCase()}`;
+    label.textContent = this.status;
+    return label;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+/**
+ * 创建装饰器
+ */
+function createDecorations(view: EditorView, plugin: TimeTrackingPlugin): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
+  
+  // 只在 Live Preview 模式下工作
+  if (!view.state.field(editorLivePreviewField)) {
+    return builder.finish();
+  }
+
+  for (const { from, to } of view.visibleRanges) {
+    for (let pos = from; pos <= to;) {
+      const line = view.state.doc.lineAt(pos);
+      const lineText = line.text;
+      const match = lineText.match(TODO_REGEX);
+
+      if (match) {
+        const [, listMarker, status, content] = match;
+        const listMarkerLen = listMarker ? listMarker.length : 0;
+        const statusStart = line.from + listMarkerLen;
+        const statusEnd = statusStart + status.length;
+
+        // 替换状态关键词为复选框
+        builder.add(
+          statusStart,
+          statusEnd,
+          Decoration.replace({
+            widget: new TodoCheckboxWidget(
+              status as TodoStatus,
+              plugin,
+              statusStart,
+              statusEnd
+            )
+          })
+        );
+
+        // 如果启用了状态标签且不是 TODO/DONE，添加标签
+        if (plugin.settings.showStatusLabel && status !== 'TODO' && status !== 'DONE') {
+          builder.add(
+            statusEnd,
+            statusEnd,
+            Decoration.widget({
+              widget: new TodoStatusWidget(status as TodoStatus),
+              side: 1
+            })
+          );
+        }
+
+        // 隐藏 HTML 时间注释
+        const commentMatch = content.match(/<!--\s*ts:[^>]*?-->/);
+        if (commentMatch) {
+          const commentStart = statusEnd + 1 + content.indexOf(commentMatch[0]);
+          const commentEnd = commentStart + commentMatch[0].length;
+          
+          builder.add(
+            commentStart,
+            commentEnd,
+            Decoration.mark({
+              class: 'time-tracking-comment-hidden',
+              inclusive: false
+            })
+          );
+        }
+
+        // 如果是完成状态且启用删除线，添加样式
+        if ((status === 'DONE' || status === 'CANCELED') && plugin.settings.enableStrikethrough) {
+          const contentStart = statusEnd + 1;
+          builder.add(
+            contentStart,
+            line.to,
+            Decoration.mark({
+              class: 'time-tracking-completed'
+            })
+          );
+        }
+      }
+
+      pos = line.to + 1;
+    }
+  }
+
+  return builder.finish();
+}
+
+/**
+ * 创建编辑器扩展
+ */
+export function createTimeTrackingExtension(plugin: TimeTrackingPlugin) {
+  return [
+    ViewPlugin.fromClass(
+      class {
+        decorations: DecorationSet;
+
+        constructor(view: EditorView) {
+          this.decorations = createDecorations(view, plugin);
+        }
+
+        update(update: ViewUpdate): void {
+          if (update.docChanged || update.viewportChanged || update.selectionSet) {
+            this.decorations = createDecorations(update.view, plugin);
+          }
+        }
+      },
+      {
+        decorations: (v) => v.decorations
+      }
+    ),
+    // 添加基础样式
+    EditorView.baseTheme({
+      '.time-tracking-live-checkbox': {
+        cursor: 'pointer',
+        margin: '0 0.3em 0 0',
+        verticalAlign: 'middle'
+      },
+      '.time-tracking-status-badge': {
+        display: 'inline-block',
+        padding: '0.1em 0.4em',
+        marginLeft: '0.3em',
+        fontSize: '0.7em',
+        fontWeight: '600',
+        borderRadius: '3px',
+        textTransform: 'uppercase',
+        letterSpacing: '0.5px',
+        verticalAlign: 'middle'
+      },
+      '.time-tracking-status-doing': {
+        backgroundColor: 'var(--time-tracking-doing-color, #ff9800)',
+        color: 'white'
+      },
+      '.time-tracking-status-later': {
+        backgroundColor: 'var(--time-tracking-later-color, #2196f3)',
+        color: 'white'
+      },
+      '.time-tracking-status-now': {
+        backgroundColor: 'var(--time-tracking-now-color, #f44336)',
+        color: 'white'
+      },
+      '.time-tracking-completed': {
+        opacity: '0.8'
+      },
+      '.time-tracking-comment-hidden': {
+        display: 'none'
+      }
+    })
+  ];
+}

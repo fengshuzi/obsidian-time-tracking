@@ -1,0 +1,186 @@
+/* Time Tracking Plugin Styles - 整合 Logseq TODO 兼容性 */
+
+/* CSS 变量 */
+:root {
+  --time-tracking-todo-color: #808080;
+  --time-tracking-doing-color: #ff9800;
+  --time-tracking-later-color: #2196f3;
+  --time-tracking-now-color: #f44336;
+  --time-tracking-done-color: #4caf50;
+  --time-tracking-canceled-color: #9e9e9e;
+}
+
+/* 基础容器样式 */
+.time-tracking-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.2em 0;
+}
+
+/* 复选框样式 */
+.time-tracking-checkbox {
+  flex-shrink: 0;
+  cursor: pointer;
+  width: 1.2em;
+  height: 1.2em;
+  margin: 0;
+}
+
+/* 内容样式 */
+.time-tracking-content {
+  flex: 1;
+  line-height: 1.5;
+}
+
+/* 状态标签 */
+.time-tracking-status-label {
+  display: inline-block;
+  padding: 0.1em 0.4em;
+  margin-right: 0.5em;
+  font-size: 0.75em;
+  font-weight: 600;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* 不同状态的颜色 */
+.time-tracking-status-todo .time-tracking-checkbox {
+  accent-color: var(--time-tracking-todo-color);
+}
+
+.time-tracking-status-doing .time-tracking-checkbox {
+  accent-color: var(--time-tracking-doing-color);
+}
+
+.time-tracking-status-doing .time-tracking-status-label {
+  background-color: var(--time-tracking-doing-color);
+  color: white;
+}
+
+.time-tracking-status-later .time-tracking-checkbox {
+  accent-color: var(--time-tracking-later-color);
+}
+
+.time-tracking-status-later .time-tracking-status-label {
+  background-color: var(--time-tracking-later-color);
+  color: white;
+}
+
+.time-tracking-status-now .time-tracking-checkbox {
+  accent-color: var(--time-tracking-now-color);
+}
+
+.time-tracking-status-now .time-tracking-status-label {
+  background-color: var(--time-tracking-now-color);
+  color: white;
+}
+
+.time-tracking-status-done .time-tracking-checkbox {
+  accent-color: var(--time-tracking-done-color);
+}
+
+.time-tracking-status-canceled .time-tracking-checkbox {
+  accent-color: var(--time-tracking-canceled-color);
+}
+
+/* 已完成任务的样式 */
+.time-tracking-status-done .time-tracking-content,
+.time-tracking-status-canceled .time-tracking-content {
+  text-decoration: none !important;
+  opacity: 0.8;
+}
+
+/* 列表项样式 */
+.time-tracking-list-item {
+  list-style: none;
+  margin-left: -1.5em;
+}
+
+/* 标题中的 TODO */
+.time-tracking-heading {
+  display: flex;
+  align-items: center;
+}
+
+.time-tracking-heading .time-tracking-item {
+  width: 100%;
+}
+
+/* 段落中的 TODO */
+.time-tracking-paragraph {
+  margin: 0.5em 0;
+}
+
+/* 时长标签 */
+.time-tracking-duration {
+  opacity: 0.7;
+  font-size: 0.9em;
+  margin-left: 0.5em;
+}
+
+/* 暗色主题适配 */
+.theme-dark .time-tracking-status-label {
+  opacity: 0.9;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .time-tracking-checkbox {
+    width: 1.4em;
+    height: 1.4em;
+  }
+  
+  .time-tracking-status-label {
+    font-size: 0.7em;
+  }
+}
+
+/* 打印样式 */
+@media print {
+  .time-tracking-checkbox {
+    -webkit-appearance: checkbox;
+    appearance: checkbox;
+  }
+  
+  .time-tracking-status-label {
+    border: 1px solid currentColor;
+    background-color: transparent !important;
+    color: currentColor !important;
+  }
+}
+
+/* 悬停效果 */
+.time-tracking-item:hover {
+  background-color: var(--background-modifier-hover);
+  border-radius: 4px;
+  margin: 0 -4px;
+  padding: 0.2em 4px;
+}
+
+/* 焦点样式 */
+.time-tracking-checkbox:focus {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+/* 动画效果 */
+.time-tracking-checkbox {
+  transition: all 0.2s ease;
+}
+
+.time-tracking-content {
+  transition: opacity 0.2s ease, text-decoration 0.2s ease;
+}
+
+/* 嵌套列表支持 */
+ul .time-tracking-list-item,
+ol .time-tracking-list-item {
+  margin-left: 0;
+}
+
+/* 与 Obsidian 原生任务列表的兼容性 */
+.task-list-item .time-tracking-item {
+  margin-left: 0;
+}
