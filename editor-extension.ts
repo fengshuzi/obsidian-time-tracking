@@ -6,7 +6,7 @@ import type TimeTrackingPlugin from './main';
 // 支持的任务状态
 type TodoStatus = 'TODO' | 'DOING' | 'LATER' | 'NOW' | 'DONE' | 'CANCELED';
 
-const TODO_REGEX = /^(\s*(?:[-*+]|\d+\.)\s+)?(TODO|DOING|LATER|NOW|DONE|CANCELED)(?:\s*<!--[^>]*-->)?\s*(.*)$/;
+const TODO_REGEX = /^(\s*(?:[-*+]|\d+\.)\s+)?(TODO|DOING|LATER|NOW|DONE|CANCELED)(?:\s+\d{2}:\d{2})?(?:\s*<!--[^>]*-->)?\s*(.*)$/;
 
 /**
  * 复选框 Widget - 替换 TODO 关键词
@@ -122,16 +122,18 @@ function createDecorations(view: EditorView, plugin: TimeTrackingPlugin): Decora
         }
 
         // 隐藏 HTML 时间注释（支持状态后的注释）
-        // 首先检查状态后是否有注释
+        // 首先检查状态后是否有时间显示和注释
         const statusEndInLine = listMarkerLen + status.length;
         const afterStatusText = lineText.substring(statusEndInLine);
-        const statusCommentMatch = afterStatusText.match(/^\s*(<!--\s*ts:[^>]*?-->)/);
         
-        if (statusCommentMatch) {
-          // 状态后的注释（新格式）
-          const commentStartInLine = statusEndInLine + afterStatusText.indexOf(statusCommentMatch[1]);
-          const commentStart = line.from + commentStartInLine;
-          const commentEnd = commentStart + statusCommentMatch[1].length;
+        // 匹配时间显示和注释：可能是 " HH:MM <!-- ... -->" 或只是 " <!-- ... -->"
+        const timeAndCommentMatch = afterStatusText.match(/^(\s+\d{2}:\d{2})?\s*(<!--\s*ts:[^>]*?-->)/);
+        
+        if (timeAndCommentMatch) {
+          // 只隐藏注释部分，保留时间显示
+          const commentStartInAfterStatus = afterStatusText.indexOf(timeAndCommentMatch[2]);
+          const commentStart = line.from + statusEndInLine + commentStartInAfterStatus;
+          const commentEnd = commentStart + timeAndCommentMatch[2].length;
           
           builder.add(
             commentStart,

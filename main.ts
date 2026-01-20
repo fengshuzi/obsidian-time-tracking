@@ -91,8 +91,8 @@ export default class TimeTrackingPlugin extends Plugin {
    */
   processListItem(li: HTMLElement): void {
     const text = li.textContent || '';
-    // 支持新格式：状态后可能有注释
-    const match = text.match(/^(TODO|DOING|LATER|NOW|DONE|CANCELED)(?:\s*<!--[^>]*-->)?\s*(.*)$/);
+    // 支持新格式：状态后可能有时间和注释
+    const match = text.match(/^(TODO|DOING|LATER|NOW|DONE|CANCELED)(?:\s+\d{2}:\d{2})?(?:\s*<!--[^>]*-->)?\s*(.*)$/);
 
     if (match) {
       const [, status, content] = match;
@@ -155,6 +155,18 @@ export default class TimeTrackingPlugin extends Plugin {
   }
 
   /**
+   * 格式化开始时间为 HH:MM 格式
+   * @param isoString ISO 时间字符串
+   * @returns 格式化的时间字符串，如 "10:32"
+   */
+  formatStartTime(isoString: string): string {
+    const date = new Date(isoString);
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    return `${hours}:${minutes}`;
+  }
+
+  /**
    * 清理意外的时间注释污染
    * @param editor 编辑器实例
    */
@@ -183,8 +195,8 @@ export default class TimeTrackingPlugin extends Plugin {
    * @returns {startTime: string, source: 'todo' | 'checkbox'} 或 null
    */
   extractTrackingInfo(line: string): { startTime: string; source: 'todo' | 'checkbox' } | null {
-    // 新格式：状态后的注释 - DOING <!-- ts:xxx|source:xxx --> content
-    const newMatch = line.match(/DOING\s*<!--\s*ts:([^|]+)\|source:(\w+)\s*-->/);
+    // 新格式：状态后的时间和注释 - DOING HH:MM <!-- ts:xxx|source:xxx --> content
+    const newMatch = line.match(/DOING\s+(?:\d{2}:\d{2}\s+)?<!--\s*ts:([^|]+)\|source:(\w+)\s*-->/);
     if (newMatch) {
       return {
         startTime: newMatch[1],
@@ -261,9 +273,21 @@ export default class TimeTrackingPlugin extends Plugin {
       console.log(`[TimeTracking] 复选框匹配 - state: "${checkState}", content: "${content}"`);
       
       if (checkState === ' ') {
-        // [ ] → DOING: 直接开始计时，记录来源为 checkbox
+        // [ ] → DOING: 直接开始计时，记录来源为 checkbox，显示开始时间
         const startTime = new Date().toISOString();
-        const newLine = `${indent}${marker} DOING <!-- ts:${startTime}|source:checkbox --> ${content}`;
+        const displayTime = this.formatStartTime(startTime);
+        
+        // 检查内容中是否已经存在时间戳（格式：HH:MM）
+        const existingTimeMatch = content.match(/^(\d{2}:\d{2})\s+(.*)$/);
+        let taskContent = content;
+        
+        if (existingTimeMatch) {
+          // 如果已存在时间戳，移除它（因为那是创建时间，不是开始时间）
+          taskContent = existingTimeMatch[2];
+          console.log(`[TimeTracking] 复选框已有时间戳 ${existingTimeMatch[1]}，替换为开始时间 ${displayTime}`);
+        }
+        
+        const newLine = `${indent}${marker} DOING ${displayTime} <!-- ts:${startTime}|source:checkbox --> ${taskContent}`;
         console.log(`[TimeTracking] [ ] → DOING: "${newLine}"`);
         editor.setLine(cursor.line, newLine);
       } else {
@@ -277,23 +301,35 @@ export default class TimeTrackingPlugin extends Plugin {
     
     // 2. 检测任务状态（支持 Logseq 格式：已有 - 前缀）
     // 使用原始行来检测 DOING 状态（因为需要时间注释），其他状态使用清理后的行
-    const todoMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+(TODO)\s+(.*)$/);
-    const doingMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(DOING)\s*(?:<!--[^>]*-->)?\s*(.*)$/); // 支持状态后的注释
-    const doneMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+(DONE)\s+(.*)$/);
+    const todoMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+(TODO)\s+(.*)$/); // 匹配 TODO 及其后的所有内容
+    const doingMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(DOING)\s+(?:\d{2}:\d{2}\s+)?(?:<!--[^>]*-->)?\s*(.*)$/); // 支持状态后的时间和注释
+    const doneMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+(DONE)\s+(?:\d{2}:\d{2}\s+)?(.*)$/); // 支持 DONE 后的时间戳
     
     console.log(`[TimeTracking] 匹配结果 - TODO: ${!!todoMatch}, DOING: ${!!doingMatch}, DONE: ${!!doneMatch}`);
     
     let newLine = '';
     
     if (todoMatch) {
-      // TODO → DOING: 添加开始时间，记录来源为 todo
+      // TODO → DOING: 添加开始时间，记录来源为 todo，显示开始时间
+      // 如果 TODO 后已经有时间戳（创建时间），用新的开始时间替换它
       const [, indent, marker, , content] = todoMatch;
       const startTime = new Date().toISOString();
+      const displayTime = this.formatStartTime(startTime);
       
-      if (content.trim()) {
-        newLine = `${indent}${marker} DOING <!-- ts:${startTime}|source:todo --> ${content}`;
+      // 检查内容中是否已经存在时间戳（格式：HH:MM）
+      const existingTimeMatch = content.match(/^(\d{2}:\d{2})\s+(.*)$/);
+      let taskContent = content;
+      
+      if (existingTimeMatch) {
+        // 如果已存在时间戳，移除它（因为那是创建时间，不是开始时间）
+        taskContent = existingTimeMatch[2];
+        console.log(`[TimeTracking] TODO 已有时间戳 ${existingTimeMatch[1]}，替换为开始时间 ${displayTime}`);
+      }
+      
+      if (taskContent.trim()) {
+        newLine = `${indent}${marker} DOING ${displayTime} <!-- ts:${startTime}|source:todo --> ${taskContent}`;
       } else {
-        newLine = `${indent}${marker} DOING <!-- ts:${startTime}|source:todo -->`;
+        newLine = `${indent}${marker} DOING ${displayTime} <!-- ts:${startTime}|source:todo -->`;
       }
       console.log(`[TimeTracking] TODO → DOING: "${newLine}"`);
       
@@ -302,6 +338,10 @@ export default class TimeTrackingPlugin extends Plugin {
       const [, indent, marker, , content] = doingMatch;
       
       console.log(`[TimeTracking] DOING 匹配 - content: "${content}"`);
+      
+      // 从原始行中提取开始时间戳（HH:MM 格式）
+      const startTimeMatch = line.match(/DOING\s+(\d{2}:\d{2})/);
+      const startTimeDisplay = startTimeMatch ? startTimeMatch[1] : null;
       
       // 提取开始时间和来源
       const trackingInfo = this.extractTrackingInfo(line);
@@ -315,32 +355,60 @@ export default class TimeTrackingPlugin extends Plugin {
         let taskText = this.removeTimeComment(content).trim();
         
         if (trackingInfo.source === 'checkbox') {
-          // 来自复选框，返回 [x]
+          // 来自复选框，返回 [x]，保留开始时间
           if (this.settings.autoAppendDuration && taskText) {
-            newLine = `${indent}${marker} [x] ${taskText} ${durationStr}`;
+            if (startTimeDisplay) {
+              newLine = `${indent}${marker} [x] ${startTimeDisplay} ${taskText} ${durationStr}`;
+            } else {
+              newLine = `${indent}${marker} [x] ${taskText} ${durationStr}`;
+            }
           } else if (taskText) {
-            newLine = `${indent}${marker} [x] ${taskText}`;
+            if (startTimeDisplay) {
+              newLine = `${indent}${marker} [x] ${startTimeDisplay} ${taskText}`;
+            } else {
+              newLine = `${indent}${marker} [x] ${taskText}`;
+            }
           } else {
             newLine = `${indent}${marker} [x] `;
           }
           console.log(`[TimeTracking] DOING → [x] (来自复选框): "${newLine}"`);
         } else {
-          // 来自 TODO，返回 DONE
+          // 来自 TODO，返回 DONE，保留开始时间
           if (this.settings.autoAppendDuration) {
             if (taskText) {
               if (this.settings.durationPosition === 'end') {
-                newLine = `${indent}${marker} DONE ${taskText} ${durationStr}`;
+                if (startTimeDisplay) {
+                  newLine = `${indent}${marker} DONE ${startTimeDisplay} ${taskText} ${durationStr}`;
+                } else {
+                  newLine = `${indent}${marker} DONE ${taskText} ${durationStr}`;
+                }
               } else {
-                newLine = `${indent}${marker} DONE ${durationStr} ${taskText}`;
+                if (startTimeDisplay) {
+                  newLine = `${indent}${marker} DONE ${startTimeDisplay} ${durationStr} ${taskText}`;
+                } else {
+                  newLine = `${indent}${marker} DONE ${durationStr} ${taskText}`;
+                }
               }
             } else {
-              newLine = `${indent}${marker} DONE ${durationStr}`;
+              if (startTimeDisplay) {
+                newLine = `${indent}${marker} DONE ${startTimeDisplay} ${durationStr}`;
+              } else {
+                newLine = `${indent}${marker} DONE ${durationStr}`;
+              }
             }
           } else {
             if (taskText) {
-              newLine = `${indent}${marker} DONE ${taskText}`;
+              if (startTimeDisplay) {
+                newLine = `${indent}${marker} DONE ${startTimeDisplay} ${taskText}`;
+              } else {
+                newLine = `${indent}${marker} DONE ${taskText}`;
+              }
             } else {
-              newLine = `${indent}${marker} DONE`;
+              if (startTimeDisplay) {
+                newLine = `${indent}${marker} DONE ${startTimeDisplay}`;
+              } else {
+                newLine = `${indent}${marker} DONE`;
+              }
             }
           }
           console.log(`[TimeTracking] DOING → DONE (来自 TODO): "${newLine}"`);
@@ -357,7 +425,7 @@ export default class TimeTrackingPlugin extends Plugin {
       }
       
     } else if (doneMatch) {
-      // DONE → 普通列表项: 清除时长和状态标记
+      // DONE → 普通列表项: 清除时长和状态标记，但保留时间戳
       const [, indent, marker, , content] = doneMatch;
       
       console.log(`[TimeTracking] DONE 匹配 - content: "${content}"`);
