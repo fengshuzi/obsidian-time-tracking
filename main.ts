@@ -9,6 +9,7 @@ interface TimeTrackingSettings {
   enableReadingMode: boolean;
   showStatusLabel: boolean;
   enableStrikethrough: boolean;
+  openTodayNoteAfterToggle: boolean;
 }
 
 const DEFAULT_SETTINGS: TimeTrackingSettings = {
@@ -18,7 +19,8 @@ const DEFAULT_SETTINGS: TimeTrackingSettings = {
   enableLivePreview: true,
   enableReadingMode: false,  // 默认关闭阅读模式渲染
   showStatusLabel: true,
-  enableStrikethrough: false
+  enableStrikethrough: false,
+  openTodayNoteAfterToggle: false  // 默认不打开今天的日记
 };
 
 export default class TimeTrackingPlugin extends Plugin {
@@ -26,9 +28,9 @@ export default class TimeTrackingPlugin extends Plugin {
 
   async onload() {
     console.log('Time Tracking 插件已加载');
-    
+
     await this.loadSettings();
-    
+
     // 注册 Markdown 后处理器（阅读模式）
     if (this.settings.enableReadingMode) {
       this.registerMarkdownPostProcessor(this.postProcessor.bind(this));
@@ -38,7 +40,7 @@ export default class TimeTrackingPlugin extends Plugin {
     if (this.settings.enableLivePreview) {
       this.registerEditorExtension(createTimeTrackingExtension(this));
     }
-    
+
     // 根据设置决定是否注册快捷键
     if (this.settings.registerHotkey) {
       this.addCommand({
@@ -59,7 +61,21 @@ export default class TimeTrackingPlugin extends Plugin {
         }
       });
     }
-    
+
+    // 新增命令：切换今日日记最后一个任务
+    this.addCommand({
+      id: 'toggle-last-task-today',
+      name: 'Toggle last task in today\'s daily note',
+      callback: () => {
+        this.toggleLastTaskInTodayNote();
+      }
+    });
+
+    // 添加侧边栏按钮
+    this.addRibbonIcon('play', 'Toggle last task in today\'s note', () => {
+      this.toggleLastTaskInTodayNote();
+    });
+
     this.addSettingTab(new TimeTrackingSettingTab(this.app, this));
   }
 
@@ -132,7 +148,7 @@ export default class TimeTrackingPlugin extends Plugin {
 
     const label = document.createElement('span');
     label.className = 'time-tracking-content';
-    
+
     // 移除 HTML 注释
     const cleanContent = content.replace(/<!--\s*ts:[^>]*?-->/g, '').trim();
     label.textContent = cleanContent;
@@ -173,11 +189,11 @@ export default class TimeTrackingPlugin extends Plugin {
   cleanTimeComments(editor: Editor) {
     const cursor = editor.getCursor();
     const line = editor.getLine(cursor.line);
-    
+
     // 检查是否有时间注释但不是 DOING 状态
     const hasTimeComment = this.extractTrackingInfo(line) !== null;
     const isDoingTask = line.match(/^(\s*)([-*+]|\d+\.)\s+(DOING)\s*(?:<!--[^>]*-->)?\s*(.*)$/);
-    
+
     if (hasTimeComment && !isDoingTask) {
       // 清理意外的时间注释
       const cleanedLine = this.removeTimeComment(line);
@@ -185,7 +201,7 @@ export default class TimeTrackingPlugin extends Plugin {
       editor.setLine(cursor.line, cleanedLine);
       return true;
     }
-    
+
     return false;
   }
 
@@ -203,7 +219,7 @@ export default class TimeTrackingPlugin extends Plugin {
         source: newMatch[2] as 'todo' | 'checkbox'
       };
     }
-    
+
     // 兼容旧格式：内容后的注释 - DOING content <!-- ts:xxx|source:xxx -->
     const oldMatch = line.match(/<!--\s*ts:([^|]+)\|source:(\w+)\s*-->/);
     if (oldMatch) {
@@ -212,7 +228,7 @@ export default class TimeTrackingPlugin extends Plugin {
         source: oldMatch[2] as 'todo' | 'checkbox'
       };
     }
-    
+
     // 兼容更旧格式（没有 source）
     const legacyMatch = line.match(/<!--\s*ts:([^>]+?)\s*-->/);
     if (legacyMatch) {
@@ -260,33 +276,33 @@ export default class TimeTrackingPlugin extends Plugin {
   toggleTaskStatus(editor: Editor) {
     const cursor = editor.getCursor();
     const line = editor.getLine(cursor.line);
-    
+
     console.log(`[TimeTracking] 原始行: "${line}"`);
-    
+
     // 首先清理任何意外的时间注释（防止污染新任务）
     const cleanedLine = this.removeTimeComment(line);
-    
+
     // 1. 优先检查是否是原生 markdown 复选框 (- [ ] 或 - [x])
     const checkboxMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+\[([ xX])\]\s+(.*)$/);
     if (checkboxMatch) {
       const [, indent, marker, checkState, content] = checkboxMatch;
       console.log(`[TimeTracking] 复选框匹配 - state: "${checkState}", content: "${content}"`);
-      
+
       if (checkState === ' ') {
         // [ ] → DOING: 直接开始计时，记录来源为 checkbox，显示开始时间
         const startTime = new Date().toISOString();
         const displayTime = this.formatStartTime(startTime);
-        
+
         // 检查内容中是否已经存在时间戳（格式：HH:MM）
         const existingTimeMatch = content.match(/^(\d{2}:\d{2})\s+(.*)$/);
         let taskContent = content;
-        
+
         if (existingTimeMatch) {
           // 如果已存在时间戳，移除它（因为那是创建时间，不是开始时间）
           taskContent = existingTimeMatch[2];
           console.log(`[TimeTracking] 复选框已有时间戳 ${existingTimeMatch[1]}，替换为开始时间 ${displayTime}`);
         }
-        
+
         const newLine = `${indent}${marker} DOING ${displayTime} <!-- ts:${startTime}|source:checkbox --> ${taskContent}`;
         console.log(`[TimeTracking] [ ] → DOING: "${newLine}"`);
         editor.setLine(cursor.line, newLine);
@@ -298,51 +314,51 @@ export default class TimeTrackingPlugin extends Plugin {
       }
       return;
     }
-    
+
     // 2. 检测任务状态（支持 Logseq 格式：已有 - 前缀）
     // 使用原始行来检测 DOING 状态（因为需要时间注释），其他状态使用清理后的行
     const todoMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+(TODO)\s+(.*)$/); // 匹配 TODO 及其后的所有内容
     const doingMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(DOING)\s+(?:\d{2}:\d{2}\s+)?(?:<!--[^>]*-->)?\s*(.*)$/); // 支持状态后的时间和注释
     const doneMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+(DONE)\s+(?:\d{2}:\d{2}\s+)?(.*)$/); // 支持 DONE 后的时间戳
-    
+
     console.log(`[TimeTracking] 匹配结果 - TODO: ${!!todoMatch}, DOING: ${!!doingMatch}, DONE: ${!!doneMatch}`);
-    
+
     let newLine = '';
-    
+
     if (todoMatch) {
       // TODO → DOING: 添加开始时间，记录来源为 todo，显示开始时间
       // 如果 TODO 后已经有时间戳（创建时间），用新的开始时间替换它
       const [, indent, marker, , content] = todoMatch;
       const startTime = new Date().toISOString();
       const displayTime = this.formatStartTime(startTime);
-      
+
       // 检查内容中是否已经存在时间戳（格式：HH:MM）
       const existingTimeMatch = content.match(/^(\d{2}:\d{2})\s+(.*)$/);
       let taskContent = content;
-      
+
       if (existingTimeMatch) {
         // 如果已存在时间戳，移除它（因为那是创建时间，不是开始时间）
         taskContent = existingTimeMatch[2];
         console.log(`[TimeTracking] TODO 已有时间戳 ${existingTimeMatch[1]}，替换为开始时间 ${displayTime}`);
       }
-      
+
       if (taskContent.trim()) {
         newLine = `${indent}${marker} DOING ${displayTime} <!-- ts:${startTime}|source:todo --> ${taskContent}`;
       } else {
         newLine = `${indent}${marker} DOING ${displayTime} <!-- ts:${startTime}|source:todo -->`;
       }
       console.log(`[TimeTracking] TODO → DOING: "${newLine}"`);
-      
+
     } else if (doingMatch) {
       // DOING → DONE 或 [x]: 根据来源决定
       const [, indent, marker, , content] = doingMatch;
-      
+
       console.log(`[TimeTracking] DOING 匹配 - content: "${content}"`);
-      
+
       // 从原始行中提取开始时间戳（HH:MM 格式）
       const startTimeMatch = line.match(/DOING\s+(\d{2}:\d{2})/);
       const startTimeDisplay = startTimeMatch ? startTimeMatch[1] : null;
-      
+
       // 提取开始时间和来源
       const trackingInfo = this.extractTrackingInfo(line);
       if (trackingInfo) {
@@ -350,10 +366,10 @@ export default class TimeTrackingPlugin extends Plugin {
         const end = new Date();
         const durationSeconds = Math.floor((end.getTime() - start.getTime()) / 1000);
         const durationStr = this.formatDuration(durationSeconds);
-        
+
         // 获取纯净的任务内容（移除可能残留的注释）
         let taskText = this.removeTimeComment(content).trim();
-        
+
         if (trackingInfo.source === 'checkbox') {
           // 来自复选框，返回 [x]，保留开始时间
           if (this.settings.autoAppendDuration && taskText) {
@@ -423,35 +439,35 @@ export default class TimeTrackingPlugin extends Plugin {
         }
         console.log(`[TimeTracking] DOING → DONE (无计时): "${newLine}"`);
       }
-      
+
     } else if (doneMatch) {
       // DONE → 普通列表项: 清除时长和状态标记，但保留时间戳
       const [, indent, marker, , content] = doneMatch;
-      
+
       console.log(`[TimeTracking] DONE 匹配 - content: "${content}"`);
-      
+
       // 移除时长标记
       let taskText = this.removeDuration(content).trim();
-      
+
       console.log(`[TimeTracking] 移除时长后: "${taskText}"`);
-      
+
       if (taskText) {
         newLine = `${indent}${marker} ${taskText}`;
       } else {
         newLine = `${indent}${marker} `;
       }
       console.log(`[TimeTracking] DONE → 普通列表: "${newLine}"`);
-      
+
     } else {
       // 3. 检查是否是普通列表项（使用清理后的行）
       const listMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
       console.log(`[TimeTracking] 普通列表匹配: ${!!listMatch}`);
-      
+
       if (listMatch) {
         const [, indent, marker, content] = listMatch;
-        
+
         console.log(`[TimeTracking] 列表项 - marker: "${marker}", content: "${content}"`);
-        
+
         if (content.trim()) {
           // 有内容，添加 TODO
           newLine = `${indent}${marker} TODO ${content}`;
@@ -474,10 +490,264 @@ export default class TimeTrackingPlugin extends Plugin {
         console.log(`[TimeTracking] 非列表 → TODO: "${newLine}"`);
       }
     }
-    
+
     // 替换当前行
     console.log(`[TimeTracking] 最终替换: "${line}" → "${newLine}"`);
     editor.setLine(cursor.line, newLine);
+  }
+
+  /**
+   * 判断一行是否是任务行
+   * 支持: TODO, DOING, DONE, LATER, NOW, CANCELED 和标准 markdown 复选框 [ ] [x] [X]
+   * @param line 行内容
+   * @returns boolean
+   */
+  isTaskLine(line: string): boolean {
+    // 匹配 TODO/DOING/DONE/LATER/NOW/CANCELED 格式
+    const todoPattern = /^(\s*)([-*+]|\d+\.)\s+(TODO|DOING|DONE|LATER|NOW|CANCELED)\s/;
+    if (todoPattern.test(line)) {
+      return true;
+    }
+
+    // 匹配标准 markdown 复选框 - [ ] 或 - [x] 或 - [X]
+    const checkboxPattern = /^(\s*)([-*+]|\d+\.)\s+\[[ xX]\]\s/;
+    if (checkboxPattern.test(line)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * 获取今天的日记文件路径
+   * 支持多种日记插件的配置
+   */
+  getTodayNotePath(): string {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    
+    // 尝试获取 daily-notes 插件配置
+    const dailyNotesPlugin = (this.app as any).internalPlugins?.plugins?.['daily-notes'];
+    if (dailyNotesPlugin?.enabled) {
+      const config = dailyNotesPlugin.instance?.options || {};
+      const folder = config.folder || '';
+      const format = config.format || 'YYYY-MM-DD';
+      
+      // 简单的日期格式替换
+      let fileName = format
+        .replace('YYYY', String(year))
+        .replace('MM', month)
+        .replace('DD', day);
+      
+      return folder ? `${folder}/${fileName}.md` : `${fileName}.md`;
+    }
+    
+    // 默认格式
+    return `${year}-${month}-${day}.md`;
+  }
+
+  /**
+   * 切换今天日记中最后一个任务的状态
+   * 永远操作今天的日记文件，不管当前打开什么文件
+   */
+  async toggleLastTaskInTodayNote() {
+    // 1. 获取今天的日记路径
+    const todayPath = this.getTodayNotePath();
+    console.log(`[TimeTracking] 今天的日记路径: ${todayPath}`);
+    
+    // 2. 查找今天的日记文件
+    const todayFile = this.app.vault.getAbstractFileByPath(todayPath) as any;
+    
+    if (!todayFile) {
+      console.log('[TimeTracking] 未找到今天的日记文件');
+      return;
+    }
+    
+    console.log(`[TimeTracking] 找到今天的日记: ${todayFile.path}`);
+
+    // 3. 读取文件内容
+    const content = await this.app.vault.read(todayFile);
+    const lines = content.split('\n');
+
+    // 4. 从后往前查找第一个任务行
+    let targetLine = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (this.isTaskLine(lines[i])) {
+        targetLine = i;
+        break;
+      }
+    }
+
+    if (targetLine === -1) {
+      console.log('[TimeTracking] 未找到任务行');
+      return;
+    }
+
+    console.log(`[TimeTracking] 找到最后一个任务在第 ${targetLine + 1} 行: "${lines[targetLine]}"`);
+
+    // 5. 切换任务状态
+    const newLine = this.toggleTaskStatusInLine(lines[targetLine]);
+    lines[targetLine] = newLine;
+
+    // 6. 写回文件
+    const newContent = lines.join('\n');
+    await this.app.vault.modify(todayFile, newContent);
+
+    console.log(`[TimeTracking] 已切换任务状态: "${lines[targetLine]}"`);
+
+    // 7. 如果设置了打开文件，则打开今天的日记并定位到任务行
+    if (this.settings.openTodayNoteAfterToggle) {
+      console.log('[TimeTracking] 打开今天的日记');
+      const leaf = this.app.workspace.getLeaf(false);
+      await leaf.openFile(todayFile);
+      
+      // 将光标移动到修改的行
+      const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+      if (view) {
+        console.log('[TimeTracking] 移动光标到任务行');
+        view.editor.setCursor({ line: targetLine, ch: 0 });
+      }
+    }
+  }
+
+  /**
+   * 对单行文本执行任务状态切换
+   * 这是 toggleTaskStatus 的纯函数版本，不依赖编辑器
+   */
+  private toggleTaskStatusInLine(line: string): string {
+    // 首先清理任何意外的时间注释
+    const cleanedLine = this.removeTimeComment(line);
+
+    // 1. 检查是否是原生 markdown 复选框
+    const checkboxMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+\[([ xX])\]\s+(.*)$/);
+    if (checkboxMatch) {
+      const [, indent, marker, checkState, content] = checkboxMatch;
+      
+      if (checkState === ' ') {
+        // [ ] → DOING
+        const startTime = new Date().toISOString();
+        const displayTime = this.formatStartTime(startTime);
+        
+        const existingTimeMatch = content.match(/^(\d{2}:\d{2})\s+(.*)$/);
+        const taskContent = existingTimeMatch ? existingTimeMatch[2] : content;
+        
+        return `${indent}${marker} DOING ${displayTime} <!-- ts:${startTime}|source:checkbox --> ${taskContent}`;
+      } else {
+        // [x] → 普通列表项
+        return `${indent}${marker} ${content}`;
+      }
+    }
+
+    // 2. 检测任务状态
+    const todoMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+(TODO)\s+(.*)$/);
+    const doingMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(DOING)\s+(?:\d{2}:\d{2}\s+)?(?:<!--[^>]*-->)?\s*(.*)$/);
+    const doneMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+(DONE)\s+(?:\d{2}:\d{2}\s+)?(.*)$/);
+
+    if (todoMatch) {
+      // TODO → DOING
+      const [, indent, marker, , content] = todoMatch;
+      const startTime = new Date().toISOString();
+      const displayTime = this.formatStartTime(startTime);
+      
+      const existingTimeMatch = content.match(/^(\d{2}:\d{2})\s+(.*)$/);
+      const taskContent = existingTimeMatch ? existingTimeMatch[2] : content;
+      
+      if (taskContent.trim()) {
+        return `${indent}${marker} DOING ${displayTime} <!-- ts:${startTime}|source:todo --> ${taskContent}`;
+      } else {
+        return `${indent}${marker} DOING ${displayTime} <!-- ts:${startTime}|source:todo -->`;
+      }
+      
+    } else if (doingMatch) {
+      // DOING → DONE 或 [x]
+      const [, indent, marker, , content] = doingMatch;
+      
+      const startTimeMatch = line.match(/DOING\s+(\d{2}:\d{2})/);
+      const startTimeDisplay = startTimeMatch ? startTimeMatch[1] : null;
+      
+      const trackingInfo = this.extractTrackingInfo(line);
+      if (trackingInfo) {
+        const start = new Date(trackingInfo.startTime);
+        const end = new Date();
+        const durationSeconds = Math.floor((end.getTime() - start.getTime()) / 1000);
+        const durationStr = this.formatDuration(durationSeconds);
+        
+        const taskText = this.removeTimeComment(content).trim();
+        
+        if (trackingInfo.source === 'checkbox') {
+          // 来自复选框，返回 [x]
+          if (this.settings.autoAppendDuration && taskText) {
+            return startTimeDisplay 
+              ? `${indent}${marker} [x] ${startTimeDisplay} ${taskText} ${durationStr}`
+              : `${indent}${marker} [x] ${taskText} ${durationStr}`;
+          } else if (taskText) {
+            return startTimeDisplay
+              ? `${indent}${marker} [x] ${startTimeDisplay} ${taskText}`
+              : `${indent}${marker} [x] ${taskText}`;
+          } else {
+            return `${indent}${marker} [x] `;
+          }
+        } else {
+          // 来自 TODO，返回 DONE
+          if (this.settings.autoAppendDuration) {
+            if (taskText) {
+              if (this.settings.durationPosition === 'end') {
+                return startTimeDisplay
+                  ? `${indent}${marker} DONE ${startTimeDisplay} ${taskText} ${durationStr}`
+                  : `${indent}${marker} DONE ${taskText} ${durationStr}`;
+              } else {
+                return startTimeDisplay
+                  ? `${indent}${marker} DONE ${startTimeDisplay} ${durationStr} ${taskText}`
+                  : `${indent}${marker} DONE ${durationStr} ${taskText}`;
+              }
+            } else {
+              return startTimeDisplay
+                ? `${indent}${marker} DONE ${startTimeDisplay} ${durationStr}`
+                : `${indent}${marker} DONE ${durationStr}`;
+            }
+          } else {
+            if (taskText) {
+              return startTimeDisplay
+                ? `${indent}${marker} DONE ${startTimeDisplay} ${taskText}`
+                : `${indent}${marker} DONE ${taskText}`;
+            } else {
+              return startTimeDisplay
+                ? `${indent}${marker} DONE ${startTimeDisplay}`
+                : `${indent}${marker} DONE`;
+            }
+          }
+        }
+      } else {
+        // 没有开始时间
+        const taskText = this.removeTimeComment(content).trim();
+        return taskText ? `${indent}${marker} DONE ${taskText}` : `${indent}${marker} DONE`;
+      }
+      
+    } else if (doneMatch) {
+      // DONE → 普通列表项
+      const [, indent, marker, , content] = doneMatch;
+      const taskText = this.removeDuration(content).trim();
+      return taskText ? `${indent}${marker} ${taskText}` : `${indent}${marker} `;
+      
+    } else {
+      // 3. 检查是否是普通列表项
+      const listMatch = cleanedLine.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+      
+      if (listMatch) {
+        const [, indent, marker, content] = listMatch;
+        return content.trim() 
+          ? `${indent}${marker} TODO ${content}`
+          : `${indent}${marker} TODO `;
+      } else {
+        // 4. 不是列表项
+        const indent = cleanedLine.match(/^(\s*)/)?.[1] || '';
+        return cleanedLine.trim()
+          ? `${indent}- TODO ${cleanedLine.trim()}`
+          : `${indent}- TODO `;
+      }
+    }
   }
 }
 
@@ -573,6 +843,16 @@ class TimeTrackingSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.durationPosition)
         .onChange(async (value: 'end' | 'afterStatus') => {
           this.plugin.settings.durationPosition = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('切换任务后打开文件')
+      .setDesc('点击侧边栏按钮切换任务状态后，是否自动打开该文件并定位到任务行')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.openTodayNoteAfterToggle)
+        .onChange(async (value) => {
+          this.plugin.settings.openTodayNoteAfterToggle = value;
           await this.plugin.saveSettings();
         }));
   }
